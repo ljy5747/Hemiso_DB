@@ -1,0 +1,13 @@
+{
+  "name": "Hemiso_DB",
+  "short_name": "Hemiso",
+  "description": "헤미소도르쿠스 개인 컬렉션 기록실",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f5ef",
+  "theme_color": "#23483f",
+  "icons": [
+    { "src": "favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

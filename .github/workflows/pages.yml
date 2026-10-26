@@ -1,0 +1,37 @@
+name: Deploy Hemiso to GitHub Pages
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: hemiso-pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check app.js
+      - run: node tests/frontend.cjs
+      - name: Prepare public assets
+        run: |
+          mkdir -p public/assets
+          cp index.html app.js styles.css favicon.svg manifest.webmanifest public/
+          cp assets/nepalensis-live.jpg assets/PHOTO_CREDITS.md public/assets/
+          touch public/.nojekyll
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@v4
