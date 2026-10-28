@@ -24,7 +24,11 @@ begin
  select id into lid from public.hemiso_lines where beetlelog_id='hemiso-test-line';
  if not exists(select 1 from public.hemiso_lines where id=lid and father_id=aid and mother_id is not null) then raise exception 'Parents not linked';end if;
  if not exists(select 1 from public.hemiso_larvae where beetlelog_id='hemiso-test-larva' and records->0->>3='0') then raise exception 'Zero weight lost';end if;
- update public.hemiso_adults set note='edited in Hemiso' where id=aid;
+ update public.hemiso_larvae set pupal_weight=12.345 where beetlelog_id='hemiso-test-larva';
+ if not exists(select 1 from public.hemiso_larvae where beetlelog_id='hemiso-test-larva' and pupal_weight=12.345) then raise exception 'Pupal weight did not persist';end if;
+ denied:=false;begin update public.hemiso_larvae set pupal_weight=0 where beetlelog_id='hemiso-test-larva';exception when check_violation then denied:=true;end;
+ if not denied then raise exception 'Invalid zero pupal weight accepted';end if;
+ update public.hemiso_adults set pupal_weight=9.876, note='edited in Hemiso' where id=aid;
  result:=public.hemiso_sync_beetlelog('push');
  if (result->>'updated_adults')::int<1 or jsonb_array_length(result->'conflicts')<>0 then raise exception 'Push failed: %',result;end if;
  select data into doc from public.beetlelog_data where user_key='user:ljy5747@gmail.com';
@@ -33,7 +37,13 @@ begin
  select jsonb_set(doc,'{parents}',(select jsonb_agg(case when x->>'id'='hemiso-test-m' then x||'{"memo":"edited in BeetleLog"}'::jsonb else x end) from jsonb_array_elements(doc->'parents') x)) into doc;
  update public.beetlelog_data set data=doc where user_key='user:ljy5747@gmail.com';
  result:=public.hemiso_sync_beetlelog('pull');
- if (result->>'updated_adults')::int<>1 or not exists(select 1 from public.hemiso_adults where id=aid and note='edited in BeetleLog') then raise exception 'Pull failed: %',result;end if;
+ if (result->>'updated_adults')::int<>1 or not exists(select 1 from public.hemiso_adults where id=aid and note='edited in BeetleLog' and pupal_weight=9.876) then raise exception 'Pull failed: %',result;end if;
+ -- Pull a changed larval record and ensure the Hemiso-only pupal measurement survives.
+ select data into doc from public.beetlelog_data where user_key='user:ljy5747@gmail.com';
+ select jsonb_set(doc,'{individuals}',(select jsonb_agg(case when x->>'id'='hemiso-test-larva' then jsonb_set(x,'{bottleRecords,0,weight}','"12"'::jsonb) else x end) from jsonb_array_elements(doc->'individuals') x)) into doc;
+ update public.beetlelog_data set data=doc where user_key='user:ljy5747@gmail.com';
+ result:=public.hemiso_sync_beetlelog('pull');
+ if not exists(select 1 from public.hemiso_larvae where beetlelog_id='hemiso-test-larva' and pupal_weight=12.345 and records->0->>3='12') then raise exception 'Sync lost pupal weight or failed larval pull';end if;
  update public.hemiso_adults set note='local concurrent edit' where id=aid;
  select jsonb_set(doc,'{parents}',(select jsonb_agg(case when x->>'id'='hemiso-test-m' then x||'{"memo":"remote concurrent edit"}'::jsonb else x end) from jsonb_array_elements(doc->'parents') x)) into doc;
  update public.beetlelog_data set data=doc where user_key='user:ljy5747@gmail.com';

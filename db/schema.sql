@@ -25,7 +25,7 @@ create table public.hemiso_adults (
  id uuid primary key default gen_random_uuid(),owner_id uuid not null default auth.uid() references auth.users(id),
  code text not null check(length(btrim(code)) between 1 and 80),species text not null default 'Dorcus nepalensis' check(length(species)<=200),
  lineage text not null default '' check(length(lineage)<=120),generation text not null default '' check(length(generation)<=30),
- sex text not null check(sex in ('M','F','U')),size numeric(6,2) check(size between 0 and 200),emerged date,
+ sex text not null check(sex in ('M','F','U')),size numeric(6,2) check(size between 0 and 200),pupal_weight numeric(8,3) check(pupal_weight > 0 and pupal_weight < 10000),emerged date,
  source text not null default '입양',status text not null default '보유',breeder text not null default '' check(length(breeder)<=120),
  note text not null default '' check(length(note)<=3000),photo_url text not null default '' check(length(photo_url)<=2000000),
  father_id uuid references public.hemiso_adults(id),mother_id uuid references public.hemiso_adults(id),
@@ -49,7 +49,7 @@ create table public.hemiso_larvae (
  id uuid primary key default gen_random_uuid(),owner_id uuid not null default auth.uid() references auth.users(id),
  line_id uuid not null references public.hemiso_lines(id),number text not null check(length(btrim(number)) between 1 and 80),
  sex text not null default 'U' check(sex in ('M','F','U')),records jsonb not null default '[]'::jsonb check(jsonb_typeof(records)='array'),
- emerged date,size numeric(6,2) check(size between 0 and 200),source_data jsonb not null default '{}'::jsonb,
+ emerged date,size numeric(6,2) check(size between 0 and 200),pupal_weight numeric(8,3) check(pupal_weight > 0 and pupal_weight < 10000),source_data jsonb not null default '{}'::jsonb,
  beetlelog_id text check(length(beetlelog_id) between 1 and 160),beetlelog_snapshot jsonb,
  created_at timestamptz not null default clock_timestamp(),updated_at timestamptz not null default clock_timestamp(),
  unique(line_id,number),unique(owner_id,beetlelog_id)

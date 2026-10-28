@@ -5,7 +5,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const marker = /\nboot\(\);\n\}\)\(\);\s*$/;
 assert.match(source, marker, 'Expected terminal boot call for isolated test harness');
-const instrumented = source.replace(marker, '\nglobalThis.test={state,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,persist,submitForm,action,boot,render};\n})();');
+const instrumented = source.replace(marker, '\nglobalThis.test={state,analysisState,pupalWeight,analysisRows,analysisSelection,analysisPage,analysisCsv,analysisGrowth,positive,average,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,persist,submitForm,action,boot,render};\n})();');
 const elements = new Map();
 const makeElement = () => ({innerHTML:'', textContent:'', className:'', style:{}, disabled:false, hidden:false, value:'', focus(){}, querySelector(){return null;}, querySelectorAll(){return [];}, click(){}, insertAdjacentHTML(_position,value){this.innerHTML+=value;}});
 const element = selector => {if(!elements.has(selector))elements.set(selector,makeElement());return elements.get(selector);};
@@ -74,6 +74,31 @@ assert.match(t.lineDetail(line),/0 mm/,'Zero eclosion length must remain visible
 assert.match(t.recordRow(['','','',0]),/value="0"/,'Numeric zero must remain editable');
 
 async function run(){
+ // Species isolation, independent pupal denominator, missing measurements and chronological growth.
+ const as=t.analysisState;
+ s.lines=[{id:'nep',name:text,species:'Dorcus nepalensis'},{id:'nep2',name:'Other line',species:' dorcus   NEPALENSIS '},{id:'don',name:'DON',species:'Dorcus donckieri'}];
+ s.larvae=[
+  {id:'n1',line_id:'nep',number:'N1',sex:'M',size:70,pupal_weight:10,records:[['2026-02-01','Feed B','800',25],['2026-01-01',text,'500',20]]},
+  {id:'n2',line_id:'nep2',number:'=formula',sex:'M',size:60,pupal_weight:12,records:[['2026-01-01','',0,0]]},
+  {id:'n3',line_id:'nep',number:'Missing pupa',sex:'M',size:80,records:[['2026-01-01','','',30]]},
+  {id:'nf',line_id:'nep',number:'Female',sex:'F',size:40,pupal_weight:5,records:[]},
+  {id:'d1',line_id:'don',number:'DON',sex:'M',size:100,pupal_weight:20,records:[]}
+ ];
+ as.source='larvae';as.species='dorcus nepalensis';as.sex='M';as.line='all';as.metric='ratio';
+ let selection=t.analysisSelection();assert.equal(selection.options.length,2);assert.equal(selection.rows.length,3);
+ assert.equal(selection.rows[0].id,'n1');assert.equal(selection.rows[0].ratio,7,'Ratio must divide 70mm by 10g pupal weight, never 25g peak larval weight');
+ assert.equal(selection.rows[0].peak,25);assert.equal(selection.rows[1].ratio,5);assert.equal(selection.rows[2].ratio,null,'No fallback to peak larval weight');
+ assert.equal(t.pupalWeight({source_data:{pupation:{pupaWeight:'11.25'}}}),11.25);assert.equal(t.pupalWeight({pupal_weight:10,source_data:{pupation:{pupaWeight:20}}}),10);assert.equal(t.pupalWeight({source_data:{pupation:{pupaWeight:''}}}),null);
+ assert.equal(t.positive(0),null);assert.equal(t.positive(''),null);assert.equal(t.positive(Infinity),null);assert.equal(t.average([null,7,5]),6);
+ const html=t.analysisPage();assert.ok(!html.includes(text));assert.ok(html.includes('&lt;img'));assert.match(html,/용화 무게\(g\)/);assert.ok(!html.includes('NaN'));
+ const csv=t.analysisCsv();assert.match(csv,/'=formula/,'Spreadsheet formulas must be neutralized');assert.ok(!csv.includes('"DON"'));
+ const growth=t.analysisGrowth(selection.rows);assert.ok(growth.indexOf('<td>2026-01-01</td>')<growth.indexOf('<td>2026-02-01</td>'),'Growth rows must be chronological');
+ as.line='nep2';assert.equal(t.analysisSelection().rows.length,1);as.species='dorcus donckieri';assert.equal(t.analysisSelection().rows[0].id,'d1');
+ s.adults=[{id:'standalone',code:'A',species:'Dorcus nepalensis',sex:'M',size:90,pupal_weight:15}];as.source='adults';as.species='dorcus nepalensis';as.line='all';as.metric='size';
+ assert.equal(t.analysisSelection().rows.length,1,'Adult and larval datasets must stay separate');assert.equal(t.analysisSelection().rows[0].ratio,6);assert.doesNotThrow(()=>t.analysisPage());
+ s.lines=[];s.larvae=[];as.source='larvae';assert.doesNotThrow(()=>t.analysisPage());
+ s.adults=[a];s.lines=[line];s.larvae=[];
+
  // Even stale in-memory collection data must be hidden before authorization.
  s.allowed=false;s.ready=true;t.render();
  assert.ok(!element('#app').innerHTML.includes('&lt;img'),'Unauthorized gate exposed record data');
@@ -103,10 +128,10 @@ async function run(){
 
  // CRUD field mappings preserve zero, blank optional values and source identities.
  server.adults=[a];server.lines=[line];server.larvae=[];s.adults=[a];s.lines=[line];s.modal={kind:'adult-form',id:a.id};calls.length=0;
- const adultForm={id:'adult-form',values:{code:'NEP-0',species:'Dorcus nepalensis',lineage:'Test',generation:'F2',sex:'M',size:'0',emerged:'',status:'보유',source:'입양',breeder:'Test',father_id:'',mother_id:'',note:'memo'}};
+ const adultForm={id:'adult-form',values:{code:'NEP-0',species:'Dorcus nepalensis',lineage:'Test',generation:'F2',sex:'M',size:'0',pupal_weight:'9.876',emerged:'',status:'보유',source:'입양',breeder:'Test',father_id:'',mother_id:'',note:'memo'}};
  await t.submitForm(adultForm);
  let mutation=calls.find(c=>c.operation==='update');assert.ok(mutation,'Adult update did not run');
- assert.equal(mutation.table,'hemiso_adults');assert.equal(mutation.payload.size,0);assert.equal(mutation.payload.emerged,null);assert.equal(mutation.payload.father_id,null);assert.equal(mutation.payload.mother_id,null);
+ assert.equal(mutation.table,'hemiso_adults');assert.equal(mutation.payload.size,0);assert.equal(mutation.payload.pupal_weight,9.876);assert.equal(mutation.payload.emerged,null);assert.equal(mutation.payload.father_id,null);assert.equal(mutation.payload.mother_id,null);
  assert.deepEqual(mutation.filters,[['id',a.id],['updated_at','version-one']]);
  assert.ok(!Object.hasOwn(mutation.payload,'photo_url'),'Unedited photos must be preserved');
  assert.ok(!Object.hasOwn(mutation.payload,'beetlelog_snapshot'),'Ordinary edits must preserve sync baselines');
@@ -117,8 +142,8 @@ async function run(){
  mutation=calls.find(c=>c.operation==='insert');assert.equal(mutation.table,'hemiso_lines');assert.equal(mutation.payload.is_wild,true);assert.equal(mutation.payload.year,2026);assert.equal(mutation.payload.mother_id,null);
  calls.length=0;s.modal={kind:'larva-form',lineId:line.id};
  const row=values=>({querySelectorAll(){return values.map(value=>({value}));}});
- await t.submitForm({id:'larva-form',values:{number:'L0',sex:'U',size:'0',emerged:''},querySelectorAll(){return [row(['2026-10-01','Test','800','0']),row(['','','',''])];}});
- mutation=calls.find(c=>c.operation==='insert');assert.equal(mutation.table,'hemiso_larvae');assert.equal(mutation.payload.line_id,line.id);assert.equal(mutation.payload.size,0);assert.equal(JSON.stringify(mutation.payload.records),'[["2026-10-01","Test","800","0"]]');
+ await t.submitForm({id:'larva-form',values:{number:'L0',sex:'U',size:'0',pupal_weight:'12.345',emerged:''},querySelectorAll(){return [row(['2026-10-01','Test','800','0']),row(['','','',''])];}});
+ mutation=calls.find(c=>c.operation==='insert');assert.equal(mutation.table,'hemiso_larvae');assert.equal(mutation.payload.line_id,line.id);assert.equal(mutation.payload.pupal_weight,12.345);assert.equal(mutation.payload.size,0);assert.equal(JSON.stringify(mutation.payload.records),'[["2026-10-01","Test","800","0"]]');
 
  // Server rejection of a stale compare-and-swap must not load or overwrite data.
  calls.length=0;stale=true;
@@ -133,6 +158,6 @@ async function run(){
  await t.action('login',{});
  assert.equal(oauthOptions.provider,'google');assert.equal(oauthOptions.options.redirectTo,'https://example.invalid/Hemiso_DB/');
  await t.action('logout',{});assert.equal(s.allowed,false);assert.equal(s.adults.length,0);assert.equal(s.lines.length,0);assert.equal(s.larvae.length,0);
- console.log('PASS: escaping, safe photos, auth gate, source species and repeat-line selection, CRUD mappings, zero values, optimistic concurrency, OAuth callback and logout cleanup.');
+ console.log('PASS: pupal-weight ratio, species isolation, missing values, growth order, CSV safety, dataset separation, escaping, safe photos, auth gate, source species and repeat-line selection, CRUD mappings, zero values, optimistic concurrency, OAuth callback and logout cleanup.');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

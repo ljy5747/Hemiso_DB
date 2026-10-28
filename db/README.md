@@ -29,3 +29,7 @@ The database security advisor reports no Hemiso security findings. Existing find
 `schema.sql` is the one-time full setup reference. `hardening.sql` is the already-applied supplementary relationship validation (included in schema.sql too). Do not re-run the full setup against an existing installation.
 
 Frontend contract regression: run `node tests/frontend.cjs` from the repository. It evaluates the real application in a Node VM with a mocked DOM and Supabase client. Checks cover HTML escaping and photo URL schemes, auth gating, species-scoped selection, repeated line imports for missing larvae, RPC argument mapping, adult/line/larva payloads, preserving zero measurements and unedited fields, optimistic update/delete versions, stale update rejection, OAuth callback construction, and logout cleanup. Test fixtures contain no production identities or collection data.
+
+## Analysis extension
+
+`analytics.sql` adds nullable `hemiso_larvae.pupal_weight` and `hemiso_adults.pupal_weight` (grams, numeric(8,3), greater than zero). Already installed. Existing RLS and ownership checks cover the column. It is intentionally independent of BeetleLog import and synchronization; those functions update explicit columns and preserve this measurement. The regression transaction verifies decimal persistence, zero rejection and preservation across larval pull.
