@@ -18,7 +18,7 @@ The allowlist contains only the existing, email-confirmed `ljy5747@gmail.com` ac
 - `rpc('hemiso_sync_beetlelog', {p_direction:'push'})` sends local changes for already-linked records to BeetleLog, preserving unknown source fields. A changed source snapshot returns a conflict instead of being overwritten.
 - Both sync calls return `updated_adults`, `updated_lines`, `updated_larvae`, and `conflicts: [{kind,id,name,reason}]`.
 
-Sync is explicit. New Hemiso-only records are not automatically created in BeetleLog. Deletions never propagate to BeetleLog. After import, sync or mutation, reload the local lists to obtain current server versions. `beetlelog_snapshot` is the synchronization baseline; do not change it in ordinary record forms.
+Legacy manual sync remains available. Linked edits now save atomically through the RPC below; source pull also runs automatically in the frontend. New Hemiso-only records are not automatically created in BeetleLog. Deletions never propagate to BeetleLog. After import, sync or mutation, reload the local lists to obtain current server versions. `beetlelog_snapshot` is the synchronization baseline; do not change it in ordinary record forms.
 
 ## Verification
 
@@ -32,4 +32,12 @@ Frontend contract regression: run `node tests/frontend.cjs` from the repository.
 
 ## Analysis extension
 
-`analytics.sql` adds nullable `hemiso_larvae.pupal_weight` and `hemiso_adults.pupal_weight` (grams, numeric(8,3), greater than zero). Already installed. Existing RLS and ownership checks cover the column. It is intentionally independent of BeetleLog import and synchronization; those functions update explicit columns and preserve this measurement. The regression transaction verifies decimal persistence, zero rejection and preservation across larval pull.
+`analytics.sql` adds nullable `hemiso_larvae.pupal_weight` and `hemiso_adults.pupal_weight` (grams, numeric(8,3), greater than zero). Already installed. Existing RLS and ownership checks cover the column. The later `twoway-sync.sql` extension synchronizes this measurement with BeetleLog `pupation.pupaWeight`. The original analytics extension preserved it locally; atomic edits now push it and source pulls update it. The regression transaction verifies decimal persistence, zero rejection and preservation across larval pull.
+
+## Atomic linked editing
+
+`twoway-sync.sql` is installed. `rpc('hemiso_save_record', {p_kind, p_id, p_expected_updated_at, p_patch})` updates an existing record and only its linked BeetleLog source in a single transaction. Returns `{record, synced}`. The server checks a per-table editable-field whitelist, owner RLS, loaded `updated_at`, and the complete source snapshot. IDs, owner, links to source identities, and snapshots are not client-editable through this RPC. Unknown source fields are preserved. If scoped source synchronization fails, the local edit rolls back.
+
+The shared invoker-only `hemiso_internal.sync_records(direction, kind?, record_id?)` backs both the original all-record refresh and the scoped save. It retains document-first lock order. Source pupa updates refresh `pupal_weight`; a newly entered weight is sent to `pupation.pupaWeight`, and clearing it clears both copies. Authorization and grants remain restricted to the approved authenticated account.
+
+`verify-twoway.sql` rolls back all fixtures and tests targeted atomic saves, remote and stale edit rejection, pupal push/pull and clearing, unknown-field preservation, whitelist enforcement, and unauthorized access. Frontend tests additionally cover background refresh guards, frozen edit versions and retaining the form on save rejection.

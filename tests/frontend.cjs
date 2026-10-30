@@ -5,13 +5,13 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const marker = /\nboot\(\);\n\}\)\(\);\s*$/;
 assert.match(source, marker, 'Expected terminal boot call for isolated test harness');
-const instrumented = source.replace(marker, '\nglobalThis.test={state,analysisState,pupalWeight,analysisRows,analysisSelection,analysisPage,analysisCsv,analysisGrowth,positive,average,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,persist,submitForm,action,boot,render};\n})();');
+const instrumented = source.replace(marker, '\nglobalThis.test={state,analysisState,pupalWeight,analysisRows,analysisSelection,analysisPage,analysisCsv,analysisGrowth,positive,average,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,pullLinked,showModal,persist,submitForm,action,boot,render};\n})();');
 const elements = new Map();
 const makeElement = () => ({innerHTML:'', textContent:'', className:'', style:{}, disabled:false, hidden:false, value:'', focus(){}, querySelector(){return null;}, querySelectorAll(){return [];}, click(){}, insertAdjacentHTML(_position,value){this.innerHTML+=value;}});
 const element = selector => {if(!elements.has(selector))elements.set(selector,makeElement());return elements.get(selector);};
 const calls = [];
 const server = {adults:[], lines:[], larvae:[]};
-let stale = false, authorize = true, signedUser = null, oauthOptions = null;
+let stale = false, authorize = true, signedUser = null, oauthOptions = null, pullResult={updated_adults:0,updated_lines:0,updated_larvae:0,conflicts:[]}, rpcFailure=null;
 const auth = {
  async getUser(){return {data:{user:signedUser},error:null};},
  async signInWithOAuth(options){oauthOptions=options;return {error:null};},
@@ -41,7 +41,17 @@ const client = {auth,
    },
   };return chain;
  },
- async rpc(name,args){calls.push({rpc:name,args});return {data:name==='hemiso_authorized'?authorize:{imported_adults:0,imported_lines:0,imported_larvae:0,issues:[]},error:null};},
+ async rpc(name,args){
+  calls.push({rpc:name,args});
+  if(name==='hemiso_save_record'){
+   if(stale||rpcFailure)return {data:null,error:{code:'40001',message:'다른 화면에서 먼저 수정했습니다. '+(rpcFailure||'')}};
+   const row={...server[args.p_kind].find(r=>r.id===args.p_id),...args.p_patch,updated_at:'fixture-new-version'};
+   server[args.p_kind]=server[args.p_kind].map(r=>r.id===row.id?row:r);
+   return {data:{record:row,synced:Boolean(row.beetlelog_id)},error:null};
+  }
+  if(name==='hemiso_sync_beetlelog')return {data:pullResult,error:rpcFailure?{message:rpcFailure}:null};
+  return {data:name==='hemiso_authorized'?authorize:{imported_adults:0,imported_lines:0,imported_larvae:0,issues:[]},error:null};
+ },
 };
 class FixtureFormData {
  constructor(form){this.data=form.values;}
@@ -52,7 +62,7 @@ const sandbox={
  window:{supabase:{createClient(){return client;}},URL,addEventListener(){}},
  document:{querySelector:element,addEventListener(){},body:{style:{}},createElement:makeElement},
  location:{hash:'',href:'https://example.invalid/Hemiso_DB/'},FormData:FixtureFormData,URL,Blob,
- setTimeout(){return 1;},clearTimeout(){},console,
+ setTimeout(){return 1;},setInterval(){return 1;},clearTimeout(){},console,
 };
 vm.runInNewContext(instrumented,sandbox,{filename:'app.js'});
 const t=sandbox.test, s=t.state;
@@ -130,9 +140,9 @@ async function run(){
  server.adults=[a];server.lines=[line];server.larvae=[];s.adults=[a];s.lines=[line];s.modal={kind:'adult-form',id:a.id};calls.length=0;
  const adultForm={id:'adult-form',values:{code:'NEP-0',species:'Dorcus nepalensis',lineage:'Test',generation:'F2',sex:'M',size:'0',pupal_weight:'9.876',emerged:'',status:'보유',source:'입양',breeder:'Test',father_id:'',mother_id:'',note:'memo'}};
  await t.submitForm(adultForm);
- let mutation=calls.find(c=>c.operation==='update');assert.ok(mutation,'Adult update did not run');
+ let mutation=calls.find(c=>c.rpc==='hemiso_save_record');assert.ok(mutation,'Atomic adult edit RPC did not run');mutation.payload=mutation.args.p_patch;mutation.table='hemiso_'+mutation.args.p_kind;
  assert.equal(mutation.table,'hemiso_adults');assert.equal(mutation.payload.size,0);assert.equal(mutation.payload.pupal_weight,9.876);assert.equal(mutation.payload.emerged,null);assert.equal(mutation.payload.father_id,null);assert.equal(mutation.payload.mother_id,null);
- assert.deepEqual(mutation.filters,[['id',a.id],['updated_at','version-one']]);
+ assert.equal(mutation.args.p_id,a.id);assert.equal(mutation.args.p_expected_updated_at,'version-one');assert.ok(!calls.some(c=>c.operation==='update'),'Ordinary edits must use the atomic save RPC');
  assert.ok(!Object.hasOwn(mutation.payload,'photo_url'),'Unedited photos must be preserved');
  assert.ok(!Object.hasOwn(mutation.payload,'beetlelog_snapshot'),'Ordinary edits must preserve sync baselines');
  assert.equal(s.busy,false);
@@ -147,17 +157,32 @@ async function run(){
 
  // Server rejection of a stale compare-and-swap must not load or overwrite data.
  calls.length=0;stale=true;
- await assert.rejects(t.persist('adults',{note:'stale'},a),/먼저 수정/);
+ await assert.rejects(t.persist('adults',{note:'stale'},a),e=>/먼저 수정/.test(e.message));
  assert.equal(calls.length,1,'Stale edit must not proceed to collection reload');stale=false;
  calls.length=0;s.modal={kind:'confirm-delete',table:'larvae',id:'fixture-created',version:'fixture-new-version'};
  await t.action('delete-confirm',makeElement());
  const deletion=calls.find(c=>c.operation==='delete');assert.equal(deletion.table,'hemiso_larvae');
  assert.deepEqual(deletion.filters,[['id','fixture-created'],['updated_at','fixture-new-version']]);
 
+
+ // Background pull runs only when allowed, linked, visible and not editing/busy.
+ s.adults=[{...a,beetlelog_id:'source-nep'}];s.lines=[];s.larvae=[];s.modal=null;s.busy=false;s.allowed=true;
+ calls.length=0;await t.pullLinked();assert.equal(calls[0].rpc,'hemiso_sync_beetlelog');assert.equal(calls[0].args.p_direction,'pull');
+ s.modal={kind:'adult-form'};calls.length=0;await t.pullLinked();assert.equal(calls.length,0,'Background pull must pause during editing');
+ s.modal=null;s.busy=true;await t.pullLinked();assert.equal(calls.length,0);s.busy=false;s.allowed=false;await t.pullLinked();assert.equal(calls.length,0);
+ s.allowed=true;s.adults=[a];await t.pullLinked();assert.equal(calls.length,0,'No linked data needs no pull');
+ s.adults=[{...a,beetlelog_id:'source-nep'}];rpcFailure='offline';await t.pullLinked();assert.equal(s.syncError,'offline');assert.equal(s.pulling,false);rpcFailure=null;await t.pullLinked();assert.equal(s.syncError,'');
+ // An editor retains its initial expected version if background data changes later.
+ server.adults=[{...a,beetlelog_id:'source-nep'}];s.adults=server.adults.slice();t.showModal('adult-form',a.id);
+ const original=s.modal.original;s.adults=[{...original,updated_at:'newer-background-version'}];calls.length=0;
+ await t.submitForm(adultForm);mutation=calls.find(c=>c.rpc==='hemiso_save_record');assert.equal(mutation.args.p_expected_updated_at,'version-one');assert.equal(s.lastSaveSynced,true);
+ // A rejected save keeps both the draft modal and a persistent visible error.
+ t.showModal('adult-form',a.id);const draft=s.modal;rpcFailure='remote conflict';calls.length=0;await t.submitForm(adultForm);
+ assert.equal(s.modal,draft,'A conflict must not close or replace the edit form');assert.equal(element('#edit-error').hidden,false);assert.match(element('#edit-error').textContent,/remote conflict/);assert.equal(s.busy,false);rpcFailure=null;
  // Login must construct a proper callback URL rather than shadowing the URL constructor.
  await t.action('login',{});
  assert.equal(oauthOptions.provider,'google');assert.equal(oauthOptions.options.redirectTo,'https://example.invalid/Hemiso_DB/');
  await t.action('logout',{});assert.equal(s.allowed,false);assert.equal(s.adults.length,0);assert.equal(s.lines.length,0);assert.equal(s.larvae.length,0);
- console.log('PASS: pupal-weight ratio, species isolation, missing values, growth order, CSV safety, dataset separation, escaping, safe photos, auth gate, source species and repeat-line selection, CRUD mappings, zero values, optimistic concurrency, OAuth callback and logout cleanup.');
+ console.log('PASS: atomic save RPC, automatic pull guards, frozen edit version, conflict draft preservation, pupal-weight ratio, species isolation, missing values, growth order, CSV safety, dataset separation, escaping, safe photos, auth gate, source species and repeat-line selection, CRUD mappings, zero values, optimistic concurrency, OAuth callback and logout cleanup.');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});
