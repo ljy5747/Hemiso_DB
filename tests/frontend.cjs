@@ -5,7 +5,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '..', 'app.js'), 'utf8');
 const marker = /\nboot\(\);\n\}\)\(\);\s*$/;
 assert.match(source, marker, 'Expected terminal boot call for isolated test harness');
-const instrumented = source.replace(marker, '\nglobalThis.test={state,analysisState,nepDataset,larvalRows,growthProfile,feedGroups,lineScores,birthLines,femaleLineBonuses,crossCandidates,pupalWeight,analysisRows,analysisSelection,analysisPage,analysisCsv,analysisGrowth,positive,average,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,pullLinked,showModal,persist,submitForm,action,boot,render};\n})();');
+const instrumented = source.replace(marker, '\nglobalThis.test={state,analysisState,nepDataset,larvalRows,growthProfile,feedGroups,lineScores,observedOutcome,growthObservation,recordedEggSets,crossCandidates,pupalWeight,analysisRows,analysisSelection,analysisPage,analysisCsv,analysisGrowth,positive,average,esc,safePhoto,adultTable,adultDetail,adultForm,lineDetail,lineForm,larvaForm,recordRow,sourceRows,sourceFiltered,syncReport,pullLinked,showModal,persist,submitForm,action,boot,render};\n})();');
 const elements = new Map();
 const makeElement = () => ({innerHTML:'', textContent:'', className:'', style:{}, disabled:false, hidden:false, value:'', focus(){}, querySelector(){return null;}, querySelectorAll(){return [];}, click(){}, insertAdjacentHTML(_position,value){this.innerHTML+=value;}});
 const element = selector => {if(!elements.has(selector))elements.set(selector,makeElement());return elements.get(selector);};
@@ -127,36 +127,38 @@ async function run(){
  assert.equal(t.growthProfile(malformed).intervals.length,0,'Do not bridge a missed weighing');
  const g=t.feedGroups(rr);assert.equal(g.length,3);assert.equal(g.find(x=>x.feed==='Feed A'&&x.volume===800).rate,3);assert.equal(g.find(x=>x.volume===1400).rate,1);
  const stats=t.lineScores(d,rr),n=stats.find(x=>x.line.id==='nep');
- assert.equal(n.n[0],2);assert.equal(n.hits,2);assert.equal(n.values[1],10);assert.equal(n.n[3],1);assert.equal(n.max,95);assert.equal(n.points.length,4);assert.equal(n.earned,95);
- const single=t.femaleLineBonuses(d,t.birthLines(d)).get('f');assert.equal(single.mean,0);assert.equal(single.sets,1);assert.equal(single.points,null);
+ assert.equal(n.n[0],2);assert.equal(n.hits,2);assert.equal(n.values[1],10);assert.equal(n.n[3],1);assert.equal(n.max,95);assert.equal(n.points.length,5);assert.equal(n.earned,95);
+ assert.equal(t.recordedEggSets(d).length,0,'Historical larval recoveries are not egg counts');
  const pairs=t.crossCandidates(d,rr);assert.equal(pairs.length,1);assert.equal(pairs[0].level,2);assert.equal(pairs[0].n,2);assert.equal(pairs[0].complete,false);
- // Closed sets belong to the mother's birth line. Her sisters inherit the bonus even before breeding.
+ // Actual eggs count towards the line; unbred sisters have no personal result.
  const originals={lines:s.lines,adults:s.adults,larvae:s.larvae};
  const heritage=id=>({id,name:id,species:'Dorcus.Nepalensis',beetlelog_id:id,nep_sets:[]});
  const specimen=(id,sex,origin)=>({id,code:id,sex,species:'Dorcus.Nepalensis',status:'보유',source_data:{bornLineId:origin}});
- const closed=(mother,count)=>({mother,count,start:'2026-01-01',end:'2026-02-01'});
+ const closed=(mother,eggs)=>({mother,eggs,start:'2026-01-01',end:'2026-02-01'});
  const high=heritage('A'),low=heritage('B'),breeding=heritage('breeding');
  const highMom=specimen('recorded','F','A'),sister=specimen('unbred','F','A'),lowMom=specimen('low','F','B'),unknown=specimen('unknown','F',''),male=specimen('male','M','');
  const foreign={...heritage('foreign'),species:'Other',nep_sets:[closed('low',999)]};
  s.lines=[high,low,breeding,foreign];s.adults=[male,lowMom,unknown,highMom,sister,{...specimen('other','F','A'),species:'Other'}];s.larvae=[];
  breeding.nep_sets=[closed('recorded',20),closed('recorded',0),closed('low',4),{...closed('low',200),end:''},closed('male',200),closed('other',200)];
- function bonuses(){const data=t.nepDataset();return t.femaleLineBonuses(data,t.birthLines(data));}
- const earned=bonuses();assert.equal(earned.get('unbred').points,5);assert.equal(earned.get('unbred').mean,10);
- assert.equal(earned.get('unbred').threshold,7);assert.equal(earned.get('unbred').sets,2);assert.equal(earned.get('low').points,0);
- assert.equal(earned.get('unknown').points,null);assert.equal(earned.has('male'),false);assert.equal(earned.has('other'),false);
- assert.match(t.adultDetail(sister),/산란 혈통 가산점<\/h3><strong>\+5점/);assert.doesNotMatch(t.adultDetail(male),/산란 혈통 가산점/);
- const ranked=t.crossCandidates(t.nepDataset(),[]);assert.equal(ranked[0].bonus.points,5);assert.equal(ranked[1].bonus.points,5);
- as.tab='score';assert.doesNotMatch(t.analysisPage(),/산란 성적 · 15/);
- as.tab='pairs';assert.match(t.analysisPage(),/암컷의 산란 혈통 가산점/);
- const sample=(lineId,size,peak)=>({lineId,sex:'M',size,pupal:10,peak,outcome:'normal'});
- const before=t.lineScores(t.nepDataset(),[sample('A',74,25),sample('B',67,20)]);
- const winners=before.find(line=>line.line.id==='A');assert.equal(winners.earned+earned.get('unbred').points,100);
- s.larvae=[{id:'a-son',line_id:'A',number:'a-son',sex:'M',size:74,pupal_weight:10,records:[['2026-01-01','','',25]],nep_outcome:'normal'},
-  {id:'b-son',line_id:'B',number:'b-son',sex:'M',size:67,pupal_weight:10,records:[['2026-01-01','','',20]],nep_outcome:'normal'}];
- assert.match(t.adultDetail(sister),/합계 100 \/ 100점/);assert.match(t.analysisPage(),/합계 100 \/ 100점/);
- breeding.nep_sets=[closed('recorded',4),closed('low',4)];
- assert.equal(bonuses().get('recorded').points,0,'Tied lines receive no bonus');
- assert.deepEqual(t.lineScores(t.nepDataset(),[sample('A',74,25),sample('B',67,20)]),before,'Spawning sets never change line scores');
+ const eggData=t.nepDataset(),eggRows=t.recordedEggSets(eggData);assert.equal(eggRows.length,3);
+ assert.match(t.adultDetail(highMom),/총 20알 · 2세트/);assert.match(t.adultDetail(sister),/확인한 알 수 기록이 없습니다/);
+ assert.doesNotMatch(t.adultDetail(male),/암컷 산란 수/);
+ const sample=(lineId,outcome,reason)=>({lineId,sex:'M',size:74,pupal:10,peak:25,outcome,observation:{reason}});
+ const cases=[sample('A','normal','feed'),sample('A','normal','individual'),sample('A',null,'individual'),sample('A','died','individual'),
+  sample('A','normal','unknown'),sample('A',null,'feed'),sample('A',null,'unknown'),sample('B','normal','none')];
+ const current=t.lineScores(eggData,cases),aa=current.find(x=>x.line.id==='A'),bb=current.find(x=>x.line.id==='B');
+ assert.equal(aa.n[3],5);assert.equal(aa.qualified,2);assert.equal(aa.rawOutcomes,4);assert.equal(aa.rawNormal,3);assert.equal(aa.points[3],6);
+ assert.equal(aa.values[4],10);assert.equal(aa.points[4],5);assert.equal(bb.points[4],2);assert.equal(aa.max,100);
+ breeding.nep_sets=[closed('recorded',0),closed('low',0)];
+ assert.equal(t.lineScores(t.nepDataset(),cases)[0].points[4],0);
+ breeding.nep_sets=[closed('recorded',0)];assert.equal(t.lineScores(t.nepDataset(),cases)[0].points[4],null);
+ as.tab='score';assert.match(t.analysisPage(),/암컷 산란 수 · 5/);as.tab='pairs';assert.doesNotMatch(t.analysisPage(),/가산점/);
+ assert.equal(t.growthObservation({flags:['성장불량']}).reason,'unknown');
+ const bottle=t.growthObservation({bottleRecords:[{flags:['원더링','성장불량']}]});assert.equal(bottle.everWandered,true);assert.equal(bottle.reason,'unknown');
+ assert.equal(t.growthObservation({flags:[],growthIssueCause:'individual'}).reason,'none');
+ assert.equal(t.observedOutcome({source_data:{eclosion:{defect:false,date:'2026-01-01'}}}),'normal');
+ assert.equal(t.observedOutcome({source_data:{eclosion:{}}}),null);assert.equal(t.observedOutcome({source_data:{eclosion:{defect:false}}}),null);
+ assert.equal(t.observedOutcome({nep_outcome:'normal',source_data:{eclosion:{defect:true}}}),'normal');
  Object.assign(s,originals);
  for(const tab of ['overview','growth','feed','score','pairs']){
   as.tab=tab;const view=t.analysisPage();assert.ok(!view.includes(otherName));assert.ok(!view.includes('NaN'));assert.ok(!view.includes('<img src=x'));
@@ -168,9 +170,12 @@ async function run(){
  let observation={id:'nep-individual',values:{hatch:'2026-01-01',pupated:'2026-05-01',outcome:'normal',adult:''}};
  stale=true;await t.submitForm(observation);assert.equal(s.modal.kind,'nep-individual');assert.equal(element('#edit-error').hidden,false);stale=false;
  await t.submitForm(observation);assert.equal(s.modal,null);assert.equal(calls.find(c=>c.operation==='update').payload.nep_outcome,'normal');
+ t.showModal('nep-individual','n1');calls.length=0;
+ await t.submitForm({...observation,values:{...observation.values,wandering:'yes',growth:'feed'}});
+ let shared=calls.find(c=>c.rpc==='hemiso_save_growth_observation');assert.equal(shared.args.p_growth,'feed');assert.equal(shared.args.p_wandering,true);assert.equal(shared.args.p_outcome,'normal');
  t.showModal('nep-sets','nep');calls.length=0;
- await t.submitForm({id:'nep-sets',values:{},querySelectorAll(){return [{querySelector(selector){const name=selector.split('"')[1];return {value:{start:'2026-01-01',end:'2026-01-31',mother:'f',count:'0'}[name]};}}];}});
- assert.equal(calls.find(c=>c.operation==='update').payload.nep_sets[0].count,0);assert.equal(s.modal,null);
+ await t.submitForm({id:'nep-sets',values:{},querySelectorAll(){return [{querySelector(selector){const name=selector.split('"')[1];return {value:{start:'2026-01-01',end:'2026-01-31',mother:'f',count:'0',eggs:'13'}[name]};}}];}});
+ assert.equal(calls.find(c=>c.operation==='update').payload.nep_sets[0].count,0);assert.equal(calls.find(c=>c.operation==='update').payload.nep_sets[0].eggs,13);assert.equal(s.modal,null);
  as.tab='overview';
 
  s.adults=[{id:'standalone',code:'A',species:'Dorcus nepalensis',sex:'M',size:90,pupal_weight:15}];as.source='adults';as.line='all';as.metric='size';

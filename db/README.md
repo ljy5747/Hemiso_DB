@@ -45,3 +45,5 @@ The shared invoker-only `hemiso_internal.sync_records(direction, kind?, record_i
 ## 네팔렌시스 분석
 
 기존 설치에는 `nepalensis-analysis.sql`을 한 번 적용합니다. 신규 설치도 `schema.sql` 다음에 적용합니다. `hemiso_nep_adults`, `hemiso_nep_lines`, `hemiso_nep_larvae`는 기존 소유자 RLS를 따르는 읽기 전용 분석 뷰입니다. 선택한 날짜·우화 결과·출생 개체 연결과 산란 세트는 Hemiso의 전용 열에 저장합니다. `verify-nepalensis.sql`은 다른 종 혼입 방지, 소유자 권한 및 회수 0마리 보존을 검증한 뒤 롤백합니다.
+
+네팔렌시스 분석 확장 후 `growth-observations.sql`을 적용합니다. 산란 세트에 실제 확인한 알 수 `eggs`와 회수 유충 수 `count`를 독립적으로 저장합니다. 개체 특이사항은 `hemiso_save_growth_observation`에서 원본 버전을 확인하고 연결된 두 기록에 함께 저장합니다. `verify-growth-observations.sql`은 테스트 데이터를 롤백합니다.
