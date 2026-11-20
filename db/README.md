@@ -41,3 +41,7 @@ Frontend contract regression: run `node tests/frontend.cjs` from the repository.
 The shared invoker-only `hemiso_internal.sync_records(direction, kind?, record_id?)` backs both the original all-record refresh and the scoped save. It retains document-first lock order. Source pupa updates refresh `pupal_weight`; a newly entered weight is sent to `pupation.pupaWeight`, and clearing it clears both copies. Authorization and grants remain restricted to the approved authenticated account.
 
 `verify-twoway.sql` rolls back all fixtures and tests targeted atomic saves, remote and stale edit rejection, pupal push/pull and clearing, unknown-field preservation, whitelist enforcement, and unauthorized access. Frontend tests additionally cover background refresh guards, frozen edit versions and retaining the form on save rejection.
+
+## 네팔렌시스 분석
+
+기존 설치에는 `nepalensis-analysis.sql`을 한 번 적용합니다. 신규 설치도 `schema.sql` 다음에 적용합니다. `hemiso_nep_adults`, `hemiso_nep_lines`, `hemiso_nep_larvae`는 기존 소유자 RLS를 따르는 읽기 전용 분석 뷰입니다. 선택한 날짜·우화 결과·출생 개체 연결과 산란 세트는 Hemiso의 전용 열에 저장합니다. `verify-nepalensis.sql`은 다른 종 혼입 방지, 소유자 권한 및 회수 0마리 보존을 검증한 뒤 롤백합니다.

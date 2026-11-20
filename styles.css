@@ -467,3 +467,8 @@ h1.page-title { display: block; margin: 7px 0 0; font-size: 29px; }
 .analysis-card > .section-heading { padding:0 0 20px; }
 .analysis-card > h2, .analysis-panels > .card > h2 { margin:0 0 12px; }
 @media(max-width:600px) { .analysis-card, .analysis-panels > .card { padding:19px; } }
+
+.nep-tabs { display:flex; flex-wrap:wrap; gap:.5rem; margin-top:1rem }
+.nep-set { display:grid; grid-template-columns:repeat(auto-fit,minmax(135px,1fr)); align-items:end; gap:.75rem; padding:1rem; border:1px solid #ccd8cf; border-radius:10px; margin:0 0 1rem }
+.analysis-card details { margin-top:1.1rem; line-height:1.65 }
+.analysis-card details summary { cursor:pointer; font-weight:600 }
