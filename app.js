@@ -152,12 +152,28 @@ function birthLines(data){
  for(const v of data.larvae){if(v.nep_adult_id&&data.adults.some(a=>a.id===v.nep_adult_id))result.set(v.nep_adult_id,v.line_id);}
  return result;
 }
-function lineScores(data,rows){
- const birth=birthLines(data),sets=new Map(),femaleIds=new Set(data.adults.filter(a=>a.sex==='F').map(a=>a.id));
- for(const l of data.lines)for(const s of l.nep_sets||[]){
-  const line=birth.get(s.mother);if(!line||!femaleIds.has(s.mother)||!Number.isInteger(s.count)||s.count<0||dayNumber(s.end)==null||dayNumber(s.start)==null||s.end<s.start)continue;
-  if(!sets.has(line))sets.set(line,[]);sets.get(line).push(s.count);
+const SCORE_WEIGHTS=[40,25,15,15];
+const FEMALE_BONUS=5;
+function femaleLineBonuses(data,births){
+ const setsByLine=new Map();
+ for(const line of data.lines)for(const set of line.nep_sets||[]){
+  const origin=births.get(set.mother);
+  if(!origin||data.adultById.get(set.mother)?.sex!=='F')continue;
+  if(!Number.isInteger(set.count)||set.count<0||dayNumber(set.start)==null||dayNumber(set.end)==null||set.end<set.start)continue;
+  if(!setsByLine.has(origin))setsByLine.set(origin,[]);
+  setsByLine.get(origin).push(set.count);
  }
+ const means=new Map([...setsByLine].map(([id,sets])=>[id,average(sets)]));
+ const threshold=means.size>=2?median([...means.values()]):null;
+ const bonuses=new Map();
+ for(const female of data.adults.filter(a=>a.sex==='F')){
+  const origin=births.get(female.id),mean=means.get(origin)??null;
+  const points=threshold==null||mean==null?null:(mean>threshold?FEMALE_BONUS:0);
+  bonuses.set(female.id,{origin,mean,threshold,points,sets:setsByLine.get(origin)?.length||0});
+ }
+ return bonuses;
+}
+function lineScores(data,rows){
  const males=rows.filter(r=>r.sex==='M');
  const stats=data.lines.map(line=>{
   const own=rows.filter(r=>r.lineId===line.id),male=own.filter(r=>r.sex==='M'),sizes=male.filter(r=>r.size!=null),hits=sizes.filter(r=>r.size>=70).length;
@@ -165,9 +181,9 @@ function lineScores(data,rows){
   const excess=sizes.filter(r=>r.pupal!=null).map(r=>{
    const ref=median(peers.filter(p=>Math.abs(p.pupal-r.pupal)<=1).map(p=>p.size));return ref==null?null:r.size-ref;
   }).filter(Number.isFinite);
-  const weights=male.map(r=>r.peak).filter(Number.isFinite),outcomes=own.filter(r=>['normal','imperfect','died'].includes(r.outcome)),normal=outcomes.filter(r=>r.outcome==='normal').length,litters=sets.get(line.id)||[];
-  return {line,values:[sizes.length?hits/sizes.length:null,median(excess),median(weights),outcomes.length?normal/outcomes.length:null,average(litters)],
-   n:[sizes.length,excess.length,weights.length,outcomes.length,litters.length],hits,normal};
+  const weights=male.map(r=>r.peak).filter(Number.isFinite),outcomes=own.filter(r=>['normal','imperfect','died'].includes(r.outcome)),normal=outcomes.filter(r=>r.outcome==='normal').length;
+  return {line,values:[sizes.length?hits/sizes.length:null,median(excess),median(weights),outcomes.length?normal/outcomes.length:null],
+   n:[sizes.length,excess.length,weights.length,outcomes.length],hits,normal};
  });
  for(const st of stats){
   st.points=st.values.map((v,i)=>{
@@ -182,9 +198,8 @@ function lineScores(data,rows){
  }
  return stats;
 }
-const SCORE_WEIGHTS=[35,20,15,15,15];
 function crossCandidates(data,rows){
- const births=birthLines(data),byId=new Map(data.adults.map(a=>[a.id,a]));
+ const births=birthLines(data),bonuses=femaleLineBonuses(data,births),byId=data.adultById;
  function ancestry(a){
   const ids=new Set([a.id]);let frontier=[a],complete=true;
   for(let depth=0;depth<2;depth++){
@@ -208,9 +223,9 @@ function crossCandidates(data,rows){
   const evidence=lines=>{const ids=new Set(lines.map(l=>l.id));return rows.filter(r=>ids.has(r.lineId)&&r.sex==='M'&&r.size!=null);};
   const exact=evidence(direct),related=evidence(similar);
   const offspring=exact.length?exact:related,level=exact.length?2:related.length?1:0;
-  out.push({m,f,level,n:offspring.length,hits:offspring.filter(r=>r.size>=70).length,complete:ma.complete&&fa.complete});
+  out.push({m,f,bonus:bonuses.get(f.id),level,n:offspring.length,hits:offspring.filter(r=>r.size>=70).length,complete:ma.complete&&fa.complete});
  }
- return out.sort((a,b)=>b.level-a.level||b.n-a.n||b.hits-a.hits||String(a.m.code).localeCompare(String(b.m.code)));
+ return out.sort((a,b)=>b.level-a.level||b.n-a.n||b.hits-a.hits||(b.bonus.points??0)-(a.bonus.points??0)||String(a.m.code).localeCompare(String(b.m.code)));
 }
 function analysisScatter(rows){
  const points=rows.filter(r=>r.pupal!=null&&r.size!=null);
@@ -277,19 +292,40 @@ function feedPage(rows){
 function scorePage(data,rows){
  const scores=lineScores(data,rows);
  const describe=(st,i,raw)=>`${st.points[i]==null?'미평가':fmt(st.points[i],1)+'점'}<small class="species-name">${raw} · n=${st.n[i]}</small>`;
- return `<section class="card analysis-card"><h2>라인 점수 · 수컷 70 mm 목표</h2><p class="muted">수컷의 체장과 체중, 암수의 정상 우화, 이 라인에서 태어난 암컷의 산란 성적으로 평가합니다. 유충 기록의 체장·번데기 무게가 비어 있으면 해당 개체로 연결한 성충의 값을 사용합니다. 분모는 현재 평가할 수 있는 항목의 배점 합계입니다.</p>
- ${analysisTable(['라인','점수 / 평가 가능 배점','70 mm 달성 · 35','무게 대비 체장 · 20','유충 최고 체중 · 15','정상 우화 · 15','산란 성적 · 15','산란 기록'],scores.map(st=>[esc(st.line.name),st.max?`<strong>${fmt(st.earned,1)} / ${st.max}</strong>`:'미평가',
- describe(st,0,`${st.hits}/${st.n[0]}마리`),describe(st,1,fmt(st.values[1])+' mm'),describe(st,2,fmt(st.values[2])+' g'),describe(st,3,`${st.normal}/${st.n[3]}마리`),describe(st,4,fmt(st.values[4])+'마리/세트'),nepAction('nep-sets','산란 세트',st.line.id)]),'네팔렌시스 라인을 등록하면 점수표가 표시됩니다.')}
+ return `<section class="card analysis-card"><h2>라인 점수 · 수컷 70 mm 목표</h2><p class="muted">라인 기본점은 체장·체중·정상 우화의 네 항목으로 최대 95점입니다. 암컷에게 적용되는 산란 혈통 가산점은 성충 상세와 교배 후보에서 확인할 수 있습니다. 유충 기록의 체장·번데기 무게가 비어 있으면 해당 개체로 연결한 성충의 값을 사용합니다. 분모는 현재 평가할 수 있는 항목의 배점 합계입니다.</p>
+ ${analysisTable(['라인','점수 / 평가 가능 배점','70 mm 달성 · '+SCORE_WEIGHTS[0],'무게 대비 체장 · '+SCORE_WEIGHTS[1],'유충 최고 체중 · '+SCORE_WEIGHTS[2],'정상 우화 · '+SCORE_WEIGHTS[3],'산란 기록'],scores.map(st=>[esc(st.line.name),st.max?`<strong>${fmt(st.earned,1)} / ${st.max}</strong>`:'미평가',
+ describe(st,0,`${st.hits}/${st.n[0]}마리`),describe(st,1,fmt(st.values[1])+' mm'),describe(st,2,fmt(st.values[2])+' g'),describe(st,3,`${st.normal}/${st.n[3]}마리`),nepAction('nep-sets','산란 세트',st.line.id)]),'네팔렌시스 라인을 등록하면 점수표가 표시됩니다.')}
  <details><summary>산출 기준과 표본 수</summary><ul>
  <li>70 mm 달성은 체장이 기록된 수컷 중 70 mm 이상인 비율, 정상 우화는 결과가 입력된 암수 중 정상 비율입니다.</li>
  <li>무게 대비 체장은 번데기 무게가 ±1 g인 다른 라인 수컷들의 체장 중앙값과 각 수컷의 체장 차이를 구해 라인 중앙값을 냅니다.</li>
- <li>유충 최고 체중은 수컷별 관측 최고 체중의 중앙값입니다. 산란 성적은 출생 라인을 확인한 암컷이 종료한 세트당 평균 회수 유충 수입니다. 회수 0마리도 포함합니다.</li>
- <li>무게 대비 체장·최고 체중·산란 성적은 비교 가능한 다른 라인 중 값이 낮은 라인의 비율에 배점을 곱합니다. 동률은 절반으로 계산합니다. n은 개체 수이며 산란 성적은 세트 수입니다.</li></ul></details></section>`;
+ <li>유충 최고 체중은 수컷별 관측 최고 체중의 중앙값입니다.</li>
+ <li>무게 대비 체장과 최고 체중은 비교 가능한 다른 라인 중 값이 낮은 라인의 비율에 배점을 곱합니다. 동률은 절반으로 계산합니다. n은 측정된 개체 수입니다.</li></ul></details></section>`;
+}
+const bonusRule='네팔렌시스 암컷들의 종료 세트를 출생 라인별로 모아 세트당 평균 회수 유충 수를 구합니다. 비교 가능한 라인이 2개 이상이고 해당 평균이 라인 평균들의 중앙값을 초과하면 그 라인 출신 암컷 모두에게 5점을 더합니다. 회수 0마리도 평균에 포함합니다.';
+function femaleScoreView(bonus,base){
+ const points=bonus.points;
+ const label=points==null?'판정 보류':`+${points}점`;
+ let evidence='출생 라인 미확인';
+ if(bonus.origin){
+  evidence=bonus.sets?`평균 ${fmt(bonus.mean)}마리/세트 · ${bonus.sets}세트`:'출생 라인의 종료 세트 없음';
+  if(bonus.sets)evidence+=bonus.threshold==null?' · 비교 라인 부족':` · 중앙값 ${fmt(bonus.threshold)}마리`;
+ }
+ const earned=base?.max?fmt(base.earned,1)+'점':'미평가';
+ const total=base?.max&&points!=null?` · 합계 ${fmt(base.earned+points,1)} / ${base.max+FEMALE_BONUS}점`:'';
+ return `<strong>${label}</strong><small class="species-name">${evidence}</small><small class="species-name">출생 라인 기본점 ${earned}${base?.max?' (평가 가능 '+base.max+'점)':''}${total}</small>`;
+}
+function adultBonusSection(adult){
+ if(adult.sex!=='F'||!isNep(adult.species))return '';
+ const data=nepDataset(),bonus=femaleLineBonuses(data,birthLines(data)).get(adult.id);
+ if(!bonus)return '';
+ const base=lineScores(data,larvalRows(data)).find(s=>s.line.id===bonus.origin);
+ return `<h3 class="detail-subtitle">산란 혈통 가산점</h3>${femaleScoreView(bonus,base)}`;
 }
 function pairsPage(data,rows){
- const list=crossCandidates(data,rows);
- return `<section class="card analysis-card"><h2>교배 후보</h2><p class="muted">보유 중인 네팔렌시스 수컷과 암컷을 대상으로 같은 출생 라인, 부모·자식, 조부모까지 확인되는 공통 조상 조합을 제외합니다. 과거 같은 개체 조합, 같은 출생 라인 조합, 첫 시도 순이며 같은 단계에서는 측정된 수컷 후손이 많은 순입니다.</p>
- ${analysisTable(['수컷','암컷','조합 근거','70 mm 이상 / 측정 수컷','부모·조부모 기록'],list.map(p=>[esc(p.m.code),esc(p.f.code),['첫 시도','같은 출생 라인 조합','같은 부모 조합'][p.level],p.n?`${p.hits} / ${p.n}마리`:'미평가',p.complete?'양쪽 모두 확인':'일부 미상']),'혈연 제외 조건을 통과한 보유 수컷·암컷 조합이 없습니다.')}</section>`;
+ const list=crossCandidates(data,rows),baseScores=new Map(lineScores(data,rows).map(s=>[s.line.id,s]));
+ return `<section class="card analysis-card"><h2>교배 후보</h2><p class="muted">보유 중인 네팔렌시스 수컷과 암컷 중 같은 출생 라인, 부모·자식, 조부모까지 공통 조상이 확인되는 조합은 제외합니다. 같은 부모 조합, 같은 출생 라인 조합, 첫 시도 순으로 표시합니다. 같은 단계에서는 측정된 수컷 후손 수, 70 mm 달성 수, 암컷 가산점 순으로 정렬합니다.</p>
+ ${analysisTable(['수컷','암컷','암컷의 산란 혈통 가산점','조합 근거','70 mm 이상 / 측정 수컷','부모·조부모 기록'],list.map(p=>[esc(p.m.code),esc(p.f.code),femaleScoreView(p.bonus,baseScores.get(p.bonus.origin)),['첫 시도','같은 출생 라인 조합','같은 부모 조합'][p.level],p.n?`${p.hits} / ${p.n}마리`:'미평가',p.complete?'양쪽 모두 확인':'일부 미상']),'혈연 제외 조건을 통과한 보유 수컷·암컷 조합이 없습니다.')}
+ <details><summary>암컷 가산점 기준</summary><p>${bonusRule}</p></details></section>`;
 }
 function analysisPage(){
  const tabs=[['overview','개체 비교'],['growth','성장·기간'],['feed','먹이·용량'],['score','라인 점수'],['pairs','교배 후보']];
@@ -373,7 +409,7 @@ function adultForm(a){
 function lineForm(l){return modalFrame(l.id?'라인 수정':'라인 등록',`<form id="line-form" class="form-grid">${field('라인명 *','name',l.name,'text','required maxlength="80" placeholder="예: NEP26-A"')}${field('종 *','species',l.species||'Dorcus nepalensis','text','required maxlength="200"')}${select('부 개체','father_id',parentOptions('M'),l.father_id||'')}${select('모 개체','mother_id',parentOptions('F'),l.mother_id||'')}${field('누대','generation',l.generation,'text','maxlength="30"')}${field('교배 연도','year',l.year||new Date().getFullYear(),'number','min="1980" max="2200"')}${field('산란 방법','method',l.method,'text','maxlength="200" placeholder="예: 산란목 / 매트"')}<div class="field"><span>Wild 라인</span><label class="inline-check"><input type="checkbox" name="is_wild" ${l.is_wild?'checked':''}> 채집 암컷 라인</label></div><label class="field wide">메모<textarea name="note" maxlength="3000" rows="3">${esc(l.note)}</textarea></label></form>`,btn('close','취소','subtle')+`<button class="btn primary" form="line-form" type="submit">${l.id?'수정 완료':'등록'}</button>`);}
 function parentCard(id,label){const a=findAdult(id);return `<div class="parent-card"><small>${label}</small>${a?`<button class="record-link" data-action="adult-detail" data-id="${a.id}">${esc(a.code)}</button><span>${esc(a.lineage||a.species)}</span><small>${esc(a.generation||'—')} · ${a.size==null?'—':esc(a.size)+' mm'}</small>`:'<strong>미지정</strong>'}</div>`;}
 function adultDetail(a){if(!a)return modalFrame('성충을 찾을 수 없습니다.','목록을 새로고침해 주세요.');
- return modalFrame(a.code,`<div class="detail-grid"><div class="detail-photo">${safePhoto(a.photo_url)?`<img src="${esc(safePhoto(a.photo_url))}" alt="${esc(a.code)} 사진">`:`<div class="specimen-placeholder">${icon('adults')}<span>등록된 사진 없음</span></div>`}</div><div><p class="eyebrow">${esc(a.species)}</p><h2>${esc(a.lineage||'혈통 미상')}</h2><p>${badge(a.sex)} ${linked(a)}</p><dl class="detail-list">${[['크기',a.size==null?'—':a.size+' mm'],['용화 무게',pupalWeight(a)==null?'—':pupalWeight(a)+' g'],['환원율',positive(a.size)&&pupalWeight(a)?fmt(a.size/pupalWeight(a))+' mm/g':'—'],['누대',a.generation],['우화일',a.emerged],['상태',a.status],['입수 경로',a.source],['브리더',a.breeder]].map(([k,v])=>`<div><dt>${k}</dt><dd>${note(v)}</dd></div>`).join('')}</dl></div></div><h3 class="detail-subtitle">계통도</h3><div class="pedigree">${parentCard(a.father_id,'♂ 부')}${parentCard(a.mother_id,'♀ 모')}</div><div class="pedigree grandparents">${parentCard(findAdult(a.father_id)?.father_id,'부계 조부')}${parentCard(findAdult(a.father_id)?.mother_id,'부계 조모')}${parentCard(findAdult(a.mother_id)?.father_id,'모계 조부')}${parentCard(findAdult(a.mother_id)?.mother_id,'모계 조모')}</div><h3 class="detail-subtitle">메모</h3><p class="record-note">${note(a.note)}</p>`,btn('adult-delete','삭제','danger',`data-id="${a.id}"`)+btn('adult-edit','수정','primary',`data-id="${a.id}"`));}
+ return modalFrame(a.code,`<div class="detail-grid"><div class="detail-photo">${safePhoto(a.photo_url)?`<img src="${esc(safePhoto(a.photo_url))}" alt="${esc(a.code)} 사진">`:`<div class="specimen-placeholder">${icon('adults')}<span>등록된 사진 없음</span></div>`}</div><div><p class="eyebrow">${esc(a.species)}</p><h2>${esc(a.lineage||'혈통 미상')}</h2><p>${badge(a.sex)} ${linked(a)}</p><dl class="detail-list">${[['크기',a.size==null?'—':a.size+' mm'],['용화 무게',pupalWeight(a)==null?'—':pupalWeight(a)+' g'],['환원율',positive(a.size)&&pupalWeight(a)?fmt(a.size/pupalWeight(a))+' mm/g':'—'],['누대',a.generation],['우화일',a.emerged],['상태',a.status],['입수 경로',a.source],['브리더',a.breeder]].map(([k,v])=>`<div><dt>${k}</dt><dd>${note(v)}</dd></div>`).join('')}</dl></div></div>${adultBonusSection(a)}<h3 class="detail-subtitle">계통도</h3><div class="pedigree">${parentCard(a.father_id,'♂ 부')}${parentCard(a.mother_id,'♀ 모')}</div><div class="pedigree grandparents">${parentCard(findAdult(a.father_id)?.father_id,'부계 조부')}${parentCard(findAdult(a.father_id)?.mother_id,'부계 조모')}${parentCard(findAdult(a.mother_id)?.father_id,'모계 조부')}${parentCard(findAdult(a.mother_id)?.mother_id,'모계 조모')}</div><h3 class="detail-subtitle">메모</h3><p class="record-note">${note(a.note)}</p>`,btn('adult-delete','삭제','danger',`data-id="${a.id}"`)+btn('adult-edit','수정','primary',`data-id="${a.id}"`));}
 function lineDetail(l){if(!l)return modalFrame('라인을 찾을 수 없습니다.','목록을 새로고침해 주세요.');const larvae=state.larvae.filter(v=>v.line_id===l.id).sort((a,b)=>a.number.localeCompare(b.number,undefined,{numeric:true}));return modalFrame(l.name,`<p class="eyebrow">${esc(l.species)}</p><div class="actions" style="margin:14px 0">${linked(l)}<span class="badge">${esc(l.generation||'누대 미상')}</span><span class="badge">${note(l.year)}</span>${l.is_wild?'<span class="badge">Wild</span>':''}</div><div class="pedigree">${parentCard(l.father_id,'♂ 부')}${parentCard(l.mother_id,'♀ 모')}</div><dl class="detail-list"><div><dt>산란 방법</dt><dd>${note(l.method)}</dd></div></dl><p class="record-note">${note(l.note)}</p><div class="section-heading detail-subtitle"><h3>유충 기록 <span class="muted">${larvae.length}</span></h3>${btn('larva-new','유충 추가','subtle small',`data-id="${l.id}"`)}</div>${larvae.length?`<div class="table-wrap"><table><thead><tr><th>개체번호</th><th>성별</th><th>최근 교체일</th><th>최근 무게</th><th>용화 무게</th><th>우화 크기</th><th>환원율</th><th>수정</th></tr></thead><tbody>${larvae.map(v=>{const r=(v.records||[]).at(-1)||[];return `<tr><td><button class="record-link" data-action="larva-edit" data-id="${v.id}">${esc(v.number)}</button></td><td>${badge(v.sex)}</td><td>${note(r[0])}</td><td>${r[3]==null||r[3]===''?'—':esc(r[3])+' g'}</td><td>${pupalWeight(v)==null?'—':fmt(pupalWeight(v))+' g'}</td><td>${v.size==null?'—':esc(v.size)+' mm'}</td><td>${positive(v.size)&&pupalWeight(v)?fmt(v.size/pupalWeight(v))+' mm/g':'—'}</td><td>${btn('larva-edit','수정','subtle small',`data-id="${esc(v.id)}"`)}</td></tr>`;}).join('')}</tbody></table></div>`:'<p class="muted">아직 등록한 유충이 없습니다.</p>'}`,btn('line-delete','삭제','danger',`data-id="${l.id}"`)+btn('line-edit','수정','primary',`data-id="${l.id}"`));}
 function larvaForm(v){return modalFrame(v.id?'유충 기록 수정':'유충 추가',`<form id="larva-form" class="form-grid">${field('개체번호 *','number',v.number,'text','required maxlength="80"')}${select('성별','sex',[['U','미확인'],['M','수컷'],['F','암컷']],v.sex||'U')}${field('용화 무게 (g)','pupal_weight',pupalWeight(v),'number','min="0.001" max="9999.999" step="0.001" placeholder="예: 12.5"')}<p class="muted wide">연결된 유충은 저장하면 용화 무게와 체중 기록도 BeetleLog에 함께 반영됩니다. 환원율은 우화 체장 ÷ 용화 무게(mm/g)로 계산합니다.</p>${field('우화일','emerged',v.emerged,'date')}${field('우화 크기 (mm)','size',v.size,'number','min="0" max="200" step="0.01"')}<div class="field wide"><span>먹이 교체 · 체중 기록</span><small class="muted">교체일 / 먹이원 / 용량 / 무게(g)</small><div id="larva-records">${(v.records?.length?v.records:[['','','','']]).map(r=>recordRow(r)).join('')}</div>${btn('record-add','기록 줄 추가','subtle small')}</div></form>`,(v.id?btn('larva-delete','유충 삭제','danger',`data-id="${v.id}"`):'')+btn('close','취소','subtle')+`<button class="btn primary" form="larva-form" type="submit">저장</button>`);}
 function recordRow(r){return `<div class="larva-record-row"><input type="date" data-record="0" aria-label="교체일" value="${esc(r[0]||'')}"><input data-record="1" aria-label="먹이원" placeholder="먹이원" value="${esc(r[1]??'')}"><input data-record="2" aria-label="용량" placeholder="용량" value="${esc(r[2]??'')}"><input type="number" min="0" step="0.01" data-record="3" aria-label="무게 (g)" placeholder="무게(g)" value="${esc(r[3]??'')}">${btn('record-remove','×','subtle small','aria-label="기록 줄 삭제"')}</div>`;}
